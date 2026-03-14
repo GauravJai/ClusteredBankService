@@ -1,10 +1,8 @@
 package com.clusteredbankservice.actor
 
 import akka.actor.typed.{ActorRef, Behavior}
-import akka.actor.typed.scaladsl.Behaviors
 import akka.persistence.typed.PersistenceId
 import akka.persistence.typed.scaladsl.{Effect, EventSourcedBehavior}
-import com.clusteredbankservice.domain.{AccountDetailsResponse, BalanceResponse, BankAccountState, CommandFailure, CommandResponse, CommandSuccess}
 import com.clusteredbankservice.domain._
 
 object BankAccountActor {

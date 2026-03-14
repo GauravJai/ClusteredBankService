@@ -1,97 +1,51 @@
 package com.clusteredbankservice.http
 
+import akka.actor.testkit.typed.scaladsl.ActorTestKit
 import akka.actor.typed.ActorSystem
-import akka.actor.typed.scaladsl.Behaviors
+import akka.cluster.sharding.typed.scaladsl.EntityRef
+import akka.cluster.sharding.typed.testkit.scaladsl.TestEntityRef
 import akka.http.scaladsl.model.StatusCodes
+import akka.http.scaladsl.server.Route
 import akka.http.scaladsl.testkit.ScalatestRouteTest
 import akka.util.Timeout
 import com.clusteredbankservice.actor.BankAccountActor
-import com.clusteredbankservice.domain.{BankAccountState, CommandResponse}
-import com.clusteredbankservice.sharding.BankAccountSharding.ShardingHelper
-import org.scalatest.wordspec.AnyWordSpec
+import com.clusteredbankservice.config.TestConfig
+import com.clusteredbankservice.mock.MockBankAccountService
+import com.clusteredbankservice.sharding.BankAccountSharding.{BankAccountEntityKey, ShardingHelper}
+import com.typesafe.config.Config
 import org.scalatest.matchers.should.Matchers
-import spray.json._
+import org.scalatest.wordspec.AnyWordSpec
 
 import scala.concurrent.duration._
-import scala.concurrent.{ExecutionContext, Future}
 
-class BankAccountRoutesSpec extends AnyWordSpec with Matchers with ScalatestRouteTest with JsonFormats {
-  
+class BankAccountRoutesSpec extends AnyWordSpec with Matchers with ScalatestRouteTest with JsonFormats with TestConfig {
+
+  lazy val testKit = ActorTestKit("BankAccountRoutesSpec", unitTestConfig)
+  override def testConfig: Config = unitTestConfig
+
   implicit val timeout: Timeout = 30.seconds
-  implicit val system: ActorSystem[_] = ActorSystem(Behaviors.empty, "TestSystem")
-  implicit val ec: ExecutionContext = system.executionContext
+  implicit val typedSystem: ActorSystem[_] = testKit.system
 
-  // Mock ShardingHelper
-  class MockShardingHelper extends ShardingHelper(null) {
-    override def getAccountEntity(accountId: String): akka.actor.typed.ActorRef[BankAccountActor.Command] = 
-      new akka.actor.typed.ActorRef[BankAccountActor.Command] {
-        override def tell(msg: BankAccountActor.Command): Unit = msg match {
-          case BankAccountActor.CreateAccountCmd(initialBalance, owner, replyTo) =>
-            if (accountId == "existing-account") {
-              replyTo ! CommandFailure(s"Account $accountId already exists")
-            } else if (initialBalance < 0) {
-              replyTo ! CommandFailure("Initial balance cannot be negative")
-            } else {
-              replyTo ! CommandSuccess(s"Account $accountId created successfully")
-            }
-          case BankAccountActor.DepositMoneyCmd(amount, replyTo) =>
-            if (amount <= 0) {
-              replyTo ! CommandFailure("Deposit amount must be positive")
-            } else if (accountId == "non-existent-account") {
-              replyTo ! CommandFailure(s"Account $accountId is not active")
-            } else {
-              replyTo ! CommandSuccess(s"Deposited $amount to account $accountId")
-            }
-          case BankAccountActor.WithdrawMoneyCmd(amount, replyTo) =>
-            if (amount <= 0) {
-              replyTo ! CommandFailure("Withdrawal amount must be positive")
-            } else if (accountId == "non-existent-account") {
-              replyTo ! CommandFailure(s"Account $accountId is not active")
-            } else if (amount > 1000) { // Mock insufficient funds
-              replyTo ! CommandFailure(s"Insufficient funds. Current balance: 1000.0, requested: $amount")
-            } else {
-              replyTo ! CommandSuccess(s"Withdrew $amount from account $accountId")
-            }
-          case BankAccountActor.GetBalanceCmd(replyTo) =>
-            if (accountId == "non-existent-account") {
-              replyTo ! CommandFailure(s"Account $accountId is not active")
-            } else {
-              replyTo ! CommandResponse.BalanceResponse(accountId, 1000.0)
-            }
-          case BankAccountActor.GetAccountDetailsCmd(replyTo) =>
-            if (accountId == "non-existent-account") {
-              replyTo ! CommandFailure(s"Account $accountId is not active")
-            } else {
-              val state = BankAccountState(
-                accountId = accountId,
-                balance = 1000.0,
-                owner = "John Doe",
-                isActive = true,
-                lastUpdated = java.time.Instant.now()
-              )
-              replyTo ! CommandResponse.AccountDetailsResponse(state)
-            }
-          case BankAccountActor.CloseAccountCmd(replyTo) =>
-            if (accountId == "non-existent-account") {
-              replyTo ! CommandFailure(s"Account $accountId is not active")
-            } else if (accountId == "already-closed-account") {
-              replyTo ! CommandFailure(s"Account $accountId is already closed")
-            } else {
-              replyTo ! CommandSuccess(s"Account $accountId closed successfully")
-            }
-        }
-        
-        override def path: akka.actor.typed.ActorRef[BankAccountActor.Command]#Path = ???
-      }
+  class MockShardingHelper(mockService: MockBankAccountService) extends ShardingHelper(null) {
+    override def getAccountEntity(accountId: String): EntityRef[BankAccountActor.Command] = {
+      TestEntityRef(BankAccountEntityKey, accountId, testKit.spawn(mockService.createMockBehavior(accountId)))
+    }
   }
 
-  val mockShardingHelper = new MockShardingHelper()
-  val routes = new BankAccountRoutes(mockShardingHelper).routes
+  val mockShardingHelper = new MockShardingHelper(new MockBankAccountService(testKit))
+  val routes: Route = new BankAccountRoutes(mockShardingHelper).routes
+
+
+  override protected def afterAll(): Unit = {
+    testKit.shutdownTestKit()
+    super.afterAll()
+  }
 
   "BankAccountRoutes" should {
 
     "create an account successfully" in {
       val request = CreateAccountRequest("new-account", 1000.0, "John Doe")
+
       Post("/api/accounts", request) ~> routes ~> check {
         status shouldBe StatusCodes.OK
         val response = responseAs[ApiResponse]
@@ -126,7 +80,7 @@ class BankAccountRoutesSpec extends AnyWordSpec with Matchers with ScalatestRout
         val response = responseAs[ApiResponse]
         response.status shouldBe "success"
         response.data shouldBe defined
-        val accountData = response.data.get.asJsObject.fields("account").asJsObject
+        val accountData = response.data.get.asJsObject
         accountData.fields("accountId").convertTo[String] shouldBe "test-account"
         accountData.fields("balance").convertTo[Double] shouldBe 1000.0
       }
@@ -195,7 +149,7 @@ class BankAccountRoutesSpec extends AnyWordSpec with Matchers with ScalatestRout
         status shouldBe StatusCodes.OK
         val response = responseAs[ApiResponse]
         response.status shouldBe "success"
-        response.message shouldBe "Bank Account API is running"
+        response.message shouldBe "Clustered Bank Service is running"
       }
     }
   }

@@ -33,7 +33,7 @@ A complete Akka implementation demonstrating Event Sourcing, CQRS, Cluster Shard
 ## Project Structure
 
 ```
-src/main/scala/com/example/clusteredbankservice/
+src/main/scala/com/clusteredbankservice/
 ├── Main.scala                    # Application bootstrap
 ├── domain/
 │   └── BankAccount.scala        # Domain models, commands, events
@@ -48,7 +48,7 @@ src/main/scala/com/example/clusteredbankservice/
     ├── ReadModel.scala           # Read model definitions
     └── BankAccountProjection.scala # Event projections
 
-src/test/scala/com/example/clusteredbankservice/
+src/test/scala/com/clusteredbankservice/
 ├── actor/
 │   └── BankAccountActorSpec.scala # Actor unit tests
 ├── http/
@@ -268,7 +268,7 @@ akka.cluster.seed-nodes = [
 ### Custom Serializers
 ```scala
 akka.actor.serialization-bindings {
-  "com.example.clusteredbankservice.CustomMessage" = custom-serializer
+  "com.clusteredbankservice.CustomMessage" = custom-serializer
 }
 ```
 

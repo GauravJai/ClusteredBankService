@@ -1,183 +1,220 @@
 package com.clusteredbankservice.actor
 
-import akka.actor.testkit.typed.scaladsl.{BehaviorTestKit, TestInbox}
-import BankAccountActor._
-import com.clusteredbankservice.domain.{BankAccountState, CommandResponse}
-import org.scalatest.wordspec.AnyWordSpec
+import akka.actor.testkit.typed.scaladsl.{ActorTestKit, TestProbe}
+import akka.actor.typed.ActorSystem
+import akka.persistence.testkit.PersistenceTestKitPlugin
+import akka.persistence.testkit.scaladsl.PersistenceTestKit
+import com.clusteredbankservice.actor.BankAccountActor._
+import com.clusteredbankservice.config.TestConfig
+import com.clusteredbankservice.domain._
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpec
+import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach}
 
-class BankAccountActorSpec extends AnyWordSpec with Matchers {
+class BankAccountActorSpec extends AnyWordSpec with Matchers with BeforeAndAfterAll with BeforeAndAfterEach with TestConfig{
+
+//  val testKit = ActorTestKit()
+  val testKit = ActorTestKit(PersistenceTestKitPlugin.config.withFallback(unitTestConfig))
+  implicit val typedSystem: ActorSystem[_] = testKit.system
+  val persistenceTestKit = PersistenceTestKit(typedSystem)
+
+  override def afterAll(): Unit = {
+    testKit.shutdownTestKit()
+  }
+
+  override def beforeEach(): Unit = {
+    super.beforeEach()
+    // 2. Clear all journals and snapshots for every persistenceId
+    persistenceTestKit.clearAll()
+  }
+
 
   "BankAccountActor" should {
 
     "create an account successfully" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
-      val cmd = CreateAccountCmd(1000.0, "John Doe", replyTo.ref)
-      testKit.run(cmd)
-      
-      replyTo.receiveAll() should contain(CommandSuccess("Account account-123 created successfully"))
-      testKit.currentState shouldBe BankAccountState("account-123", 1000.0, "John Doe", isActive = true, testKit.currentState.lastUpdated)
+      val cmd = CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref)
+      accountActor ! cmd
+
+      replyTo.receiveMessage() shouldBe CommandSuccess("Account account-123 created successfully")
+
+      val detailsProbe = TestProbe[CommandResponse]()
+      accountActor ! GetAccountDetailsCmd("account-123", detailsProbe.ref)
+      val detailsResponse = detailsProbe.receiveMessage().asInstanceOf[AccountDetailsResponse]
+      detailsResponse.state shouldBe BankAccountState("account-123", 1000.0, "John Doe", isActive = true, detailsResponse.state.lastUpdated)
     }
 
     "reject duplicate account creation" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
       
       // Create account first time
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll() should contain(CommandSuccess("Account account-123 created successfully"))
+      val createProbe1 = TestProbe[CommandResponse]()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", createProbe1.ref))
+      createProbe1.receiveMessage() shouldBe CommandSuccess("Account account-123 created successfully")
       
       // Try to create same account again
-      testKit.run(CreateAccountCmd(500.0, "Jane Doe", replyTo.ref))
-      replyTo.receiveAll() should contain(CommandFailure("Account account-123 already exists"))
+      val createProbe2 = TestProbe[CommandResponse]()
+      accountActor ! (CreateAccountCmd("account-123", 500.0, "Jane Doe", createProbe2.ref))
+      createProbe2.receiveMessage() shouldBe CommandFailure("Account account-123 already exists")
     }
 
     "deposit money successfully" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
       // Create account
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref))
+      replyTo.receiveMessage()
       
       // Deposit money
-      testKit.run(DepositMoneyCmd(500.0, replyTo.ref))
-      replyTo.receiveAll() should contain(CommandSuccess("Deposited 500.0 to account account-123"))
+      accountActor ! (DepositMoneyCmd("account-123", 500.0, replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandSuccess("Deposited 500.0 to account account-123")
       
-      testKit.currentState.balance shouldBe 1500.0
+      val balanceInbox = TestProbe[CommandResponse]()
+      accountActor ! (GetBalanceCmd("account-123", balanceInbox.ref))
+      val balanceResponse = balanceInbox.receiveMessage().asInstanceOf[BalanceResponse]
+      balanceResponse.balance shouldBe 1500.0
     }
 
     "reject deposit to non-existent account" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
-      testKit.run(DepositMoneyCmd(500.0, replyTo.ref))
-      replyTo.receiveAll() should contain(CommandFailure("Account account-123 is not active"))
+      accountActor ! (DepositMoneyCmd("account-123", 500.0, replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandFailure("Account account-123 is not active")
     }
 
     "reject negative deposit amount" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
       // Create account
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref))
+      replyTo.receiveMessage()
       
       // Try to deposit negative amount
-      testKit.run(DepositMoneyCmd(-100.0, replyTo.ref))
-      replyTo.receiveAll() should contain(CommandFailure("Deposit amount must be positive"))
+      accountActor ! (DepositMoneyCmd("account-123", -100.0, replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandFailure("Deposit amount must be positive")
     }
 
     "withdraw money successfully" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
       // Create account
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref))
+      replyTo.receiveMessage()
       
       // Withdraw money
-      testKit.run(WithdrawMoneyCmd(300.0, replyTo.ref))
-      replyTo.receiveAll() should contain(CommandSuccess("Withdrew 300.0 from account account-123"))
+      accountActor ! (WithdrawMoneyCmd("account-123", 300.0, replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandSuccess("Withdrew 300.0 from account account-123")
       
-      testKit.currentState.balance shouldBe 700.0
+      val balanceInbox = TestProbe[CommandResponse]()
+      accountActor ! (GetBalanceCmd("account-123", balanceInbox.ref))
+      val balanceResponse = balanceInbox.receiveMessage().asInstanceOf[BalanceResponse]
+      balanceResponse.balance shouldBe 700.0
     }
 
     "reject withdrawal with insufficient funds" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
       // Create account
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref))
+      replyTo.receiveMessage()
       
       // Try to withdraw more than balance
-      testKit.run(WithdrawMoneyCmd(1500.0, replyTo.ref))
-      replyTo.receiveAll() should contain(CommandFailure("Insufficient funds. Current balance: 1000.0, requested: 1500.0"))
+      accountActor ! (WithdrawMoneyCmd("account-123", 1500.0, replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandFailure("Insufficient funds. Current balance: 1000.0, requested: 1500.0")
       
-      testKit.currentState.balance shouldBe 1000.0
+      val balanceInbox = TestProbe[CommandResponse]()
+      accountActor ! (GetBalanceCmd("account-123", balanceInbox.ref))
+      val balanceResponse = balanceInbox.receiveMessage().asInstanceOf[BalanceResponse]
+      balanceResponse.balance shouldBe 1000.0
     }
 
     "reject negative withdrawal amount" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
       // Create account
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref))
+      replyTo.receiveMessage()
       
       // Try to withdraw negative amount
-      testKit.run(WithdrawMoneyCmd(-100.0, replyTo.ref))
-      replyTo.receiveAll() should contain(CommandFailure("Withdrawal amount must be positive"))
+      accountActor ! (WithdrawMoneyCmd("account-123", -100.0, replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandFailure("Withdrawal amount must be positive")
     }
 
     "get balance successfully" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
       // Create account
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref))
+      replyTo.receiveMessage()
       
       // Get balance
-      testKit.run(GetBalanceCmd(replyTo.ref))
-      replyTo.receiveAll() should contain(BalanceResponse("account-123", 1000.0))
+      accountActor ! (GetBalanceCmd("account-123", replyTo.ref))
+      replyTo.receiveMessage() shouldBe BalanceResponse("account-123", 1000.0)
     }
 
     "get account details successfully" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
       // Create account
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref))
+      replyTo.receiveMessage()
       
       // Get account details
-      testKit.run(GetAccountDetailsCmd(replyTo.ref))
-      val responses = replyTo.receiveAll()
-      responses should have size 1
-      responses.head shouldBe a[AccountDetailsResponse]
-      responses.head.asInstanceOf[AccountDetailsResponse].state.balance shouldBe 1000.0
+      accountActor ! (GetAccountDetailsCmd("account-123", replyTo.ref))
+      val response = replyTo.receiveMessage()
+      response shouldBe a[AccountDetailsResponse]
+      response.asInstanceOf[AccountDetailsResponse].state.balance shouldBe 1000.0
     }
 
     "close account successfully" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
       // Create account
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref))
+      replyTo.receiveMessage()
       
       // Close account
-      testKit.run(CloseAccountCmd(replyTo.ref))
-      replyTo.receiveAll() should contain(CommandSuccess("Account account-123 closed successfully"))
+      accountActor ! (CloseAccountCmd("account-123", replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandSuccess("Account account-123 closed successfully")
       
-      testKit.currentState.isActive shouldBe false
+      val detailsInbox = TestProbe[CommandResponse]()
+      accountActor ! (GetAccountDetailsCmd("account-123", detailsInbox.ref))
+      val detailsResponse = detailsInbox.receiveMessage().asInstanceOf[AccountDetailsResponse]
+      detailsResponse.state.isActive shouldBe false
     }
 
     "reject operations on closed account" in {
-      val testKit = BehaviorTestKit[Command](BankAccountActor("account-123"))
-      val replyTo = TestInbox[CommandResponse]()
+      val accountActor = testKit.spawn(BankAccountActor("account-123"))
+      val replyTo = TestProbe[CommandResponse]()
       
       // Create and close account
-      testKit.run(CreateAccountCmd(1000.0, "John Doe", replyTo.ref))
-      replyTo.receiveAll()
-      testKit.run(CloseAccountCmd(replyTo.ref))
-      replyTo.receiveAll()
+      accountActor ! (CreateAccountCmd("account-123", 1000.0, "John Doe", replyTo.ref))
+      replyTo.receiveMessage()
+      accountActor ! (CloseAccountCmd("account-123", replyTo.ref))
+      replyTo.receiveMessage()
       
       // Try to deposit to closed account
-      testKit.run(DepositMoneyCmd(500.0, replyTo.ref))
-      replyTo.receiveAll() should contain(CommandFailure("Account account-123 is not active"))
+      accountActor ! (DepositMoneyCmd("account-123", 500.0, replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandFailure("Account account-123 is not active")
       
       // Try to withdraw from closed account
-      testKit.run(WithdrawMoneyCmd(300.0, replyTo.ref))
-      replyTo.receiveAll() should contain(CommandFailure("Account account-123 is not active"))
+      accountActor ! (WithdrawMoneyCmd("account-123", 300.0, replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandFailure("Account account-123 is not active")
       
       // Try to close already closed account
-      testKit.run(CloseAccountCmd(replyTo.ref))
-      replyTo.receiveAll() should contain(CommandFailure("Account account-123 is already closed"))
+      accountActor ! (CloseAccountCmd("account-123", replyTo.ref))
+      replyTo.receiveMessage() shouldBe CommandFailure("Account account-123 is already closed")
     }
   }
 }

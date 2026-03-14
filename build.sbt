@@ -2,13 +2,15 @@ ThisBuild / version := "0.1.0-SNAPSHOT"
 ThisBuild / scalaVersion := "2.13.12"
 
 import sbt.Keys.libraryDependencies
-import sbt.CrossVersion
 
 // Akka versions compatible with Scala 2.13.12
 val akkaVersion = "2.8.8"
 val akkaHttpVersion = "10.5.3"
 
 val logbackVersion = "1.5.32"
+
+// Disable parallel execution for tests
+Test / parallelExecution := false
 
 lazy val root = (project in file("."))
   .settings(
@@ -36,8 +38,12 @@ lazy val root = (project in file("."))
 
       // Testing
       "com.typesafe.akka" %% "akka-actor-testkit-typed" % akkaVersion % Test,
+      "com.typesafe.akka" %% "akka-testkit" % akkaVersion % Test,
       "com.typesafe.akka" %% "akka-stream-testkit" % akkaVersion % Test,
       "com.typesafe.akka" %% "akka-http-testkit" % akkaHttpVersion % Test,
+      "com.typesafe.akka" %% "akka-cluster-sharding-typed" % akkaVersion % Test,
+      "org.scalatest" %% "scalatest" % "3.2.19" % Test,
+      "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
 
       // Logging
       "ch.qos.logback" % "logback-classic" % logbackVersion

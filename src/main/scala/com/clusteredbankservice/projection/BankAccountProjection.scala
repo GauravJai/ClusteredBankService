@@ -1,13 +1,10 @@
 package com.clusteredbankservice.projection
 
-import java.util.UUID
-import scala.concurrent.ExecutionContext
-import scala.concurrent.Future
-
 import akka.actor.typed.ActorSystem
-import akka.actor.typed.scaladsl.Behaviors
 import com.clusteredbankservice.actor.BankAccountActor
-import com.clusteredbankservice.projection.{AccountReadModel, AccountStatistics, TransactionRecord}
+
+import java.util.UUID
+import scala.concurrent.{ExecutionContext, Future}
 
 object BankAccountProjection {
   

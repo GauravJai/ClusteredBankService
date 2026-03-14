@@ -5,13 +5,12 @@ import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.util.Timeout
 import com.clusteredbankservice.actor.BankAccountActor
-import com.clusteredbankservice.domain.{AccountDetailsResponse, BalanceResponse, CommandFailure, CommandResponse, CommandSuccess}
+import com.clusteredbankservice.domain._
 import com.clusteredbankservice.sharding.BankAccountSharding.ShardingHelper
 import spray.json._
 
-import scala.concurrent.ExecutionContext
-import scala.concurrent.Future
 import scala.concurrent.duration._
+import scala.concurrent.{ExecutionContext, Future}
 
 class BankAccountRoutes(shardingHelper: ShardingHelper)(implicit system: ActorSystem[_], ec: ExecutionContext) extends JsonFormats {
   
@@ -30,6 +29,13 @@ class BankAccountRoutes(shardingHelper: ShardingHelper)(implicit system: ActorSy
 
   val routes: Route = pathPrefix("api" / "accounts") {
     concat(
+      // Health check
+      path("health") {
+        get {
+          complete(ApiResponse("success", "Clustered Bank Service is running", None))
+        }
+      },
+
       // Create account
       post {
         entity(as[CreateAccountRequest]) { request =>
@@ -98,14 +104,8 @@ class BankAccountRoutes(shardingHelper: ShardingHelper)(implicit system: ActorSy
           
           complete(responseFuture.map(commandResponseToApiResponse))
         }
-      },
-      
-      // Health check
-      path("health") {
-        get {
-          complete(ApiResponse("success", "Clustered Bank Service is running", None))
-        }
       }
+
     )
   }
 }

@@ -1,10 +1,9 @@
 package com.clusteredbankservice.sharding
 
-import akka.actor.typed.{ActorRef, ActorSystem, Behavior, Scheduler}
 import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import akka.cluster.sharding.typed.ShardingMessageExtractor
 import akka.cluster.sharding.typed.scaladsl.{ClusterSharding, Entity, EntityRef, EntityTypeKey}
-import akka.persistence.typed.PersistenceId
 import com.clusteredbankservice.actor.BankAccountActor
 import com.clusteredbankservice.domain.CommandResponse
 
@@ -26,7 +25,7 @@ object BankAccountSharding {
     }
 
     override def shardId(entityId: String): String = {
-      // Simple shard allocation - you can use more sophisticated logic if needed
+      // Simple shard allocation -  more sophisticated logic can be used if needed
       // This distributes entities across shards based on hash of entityId
       (Math.abs(entityId.hashCode) % 10).toString
     }
@@ -56,9 +55,9 @@ object BankAccountSharding {
   case object NotUsed extends NotUsed
 
   // Helper methods to interact with sharded entities
-  class ShardingHelper(sharding: akka.cluster.sharding.typed.scaladsl.ClusterSharding) {
+  class ShardingHelper(sharding: ClusterSharding) {
     
-    def getAccountEntity(accountId: String): akka.cluster.sharding.typed.scaladsl.EntityRef[BankAccountActor.Command] = {
+    def getAccountEntity(accountId: String): EntityRef[BankAccountActor.Command] = {
       sharding.entityRefFor(BankAccountEntityKey, accountId)
     }
 
@@ -116,6 +115,6 @@ object BankAccountSharding {
   }
 
   object ShardingHelper {
-    def apply(sharding: akka.cluster.sharding.typed.scaladsl.ClusterSharding): ShardingHelper = new ShardingHelper(sharding)
+    def apply(sharding: ClusterSharding): ShardingHelper = new ShardingHelper(sharding)
   }
 }

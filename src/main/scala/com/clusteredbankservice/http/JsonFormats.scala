@@ -1,9 +1,8 @@
 package com.clusteredbankservice.http
 
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
-import com.clusteredbankservice.domain.{AccountDetailsResponse, BalanceResponse, BankAccountState, CommandFailure, CommandResponse, CommandSuccess}
-import spray.json._
 import com.clusteredbankservice.domain._
+import spray.json._
 
 import java.time.Instant
 import java.time.format.DateTimeFormatter

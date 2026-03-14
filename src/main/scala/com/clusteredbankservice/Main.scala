@@ -1,18 +1,15 @@
 package com.clusteredbankservice
 
-import akka.actor.typed.{ActorRef, ActorSystem, SpawnProtocol}
 import akka.actor.typed.scaladsl.Behaviors
-import akka.cluster.sharding.typed.scaladsl.ClusterSharding
+import akka.actor.typed.{ActorSystem, SpawnProtocol}
 import akka.cluster.typed.{Cluster, JoinSeedNodes}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.server.Route
-import com.clusteredbankservice.sharding.BankAccountSharding
-import BankAccountSharding.ShardingHelper
 import com.clusteredbankservice.http.BankAccountRoutes
+import com.clusteredbankservice.sharding.BankAccountSharding
 import com.typesafe.config.ConfigFactory
 
-import scala.concurrent.ExecutionContext
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
 
 object Main {

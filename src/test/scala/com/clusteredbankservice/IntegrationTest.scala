@@ -1,38 +1,65 @@
 package com.clusteredbankservice
 
-import akka.actor.testkit.typed.scaladsl.ScalaTestActorTestKit
-import akka.actor.typed.{ActorRef, ActorSystem}
+import akka.actor.testkit.typed.scaladsl.ActorTestKit
+import akka.actor.typed.ActorSystem
+import akka.cluster.sharding.typed.scaladsl.{ClusterSharding, Entity}
 import akka.cluster.typed.{Cluster, JoinSeedNodes}
-import akka.http.scaladsl.model.{ContentTypes, HttpEntity, StatusCodes}
-import akka.http.scaladsl.testkit.RouteTestTimeout
+import akka.http.scaladsl.model.StatusCodes
+import akka.http.scaladsl.testkit.{RouteTestTimeout, ScalatestRouteTest}
 import akka.util.Timeout
 import com.clusteredbankservice.actor.BankAccountActor
-import com.clusteredbankservice.domain.CommandResponse
-import com.clusteredbankservice.http.{ApiResponse, CreateAccountRequest, DepositRequest, WithdrawRequest}
-import com.clusteredbankservice.sharding.BankAccountSharding.ShardingHelper
-import com.example.clusteredbankservice.{BankAccountRoutes}
-import org.scalatest.wordspec.AnyWordSpec
+import com.clusteredbankservice.config.TestConfig
+import com.clusteredbankservice.http._
+import com.clusteredbankservice.sharding.BankAccountSharding.{BankAccountEntityKey, ShardingHelper}
+import com.typesafe.config.Config
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
-import spray.json._
+import org.scalatest.wordspec.AnyWordSpec
 
+import scala.concurrent.Future
 import scala.concurrent.duration._
-import scala.concurrent.{ExecutionContext, Future}
 
-class IntegrationTest extends AnyWordSpec with Matchers with ScalaTestActorTestKit {
+class IntegrationTest extends AnyWordSpec with Matchers with BeforeAndAfterAll with ScalatestRouteTest with JsonFormats with TestConfig {
+
+  override def testConfig: Config = integrationTestConfig
+  val testKit = ActorTestKit("IntegrationTest", integrationTestConfig)
+
+
+  override protected def beforeAll(): Unit = {
+    // Setup cluster
+    val cluster = Cluster(testKit.system)
+    cluster.manager ! JoinSeedNodes(List(cluster.selfMember.address))
+
+    // Initialize sharding
+    val sharding = ClusterSharding(testKit.system)
+    sharding.init(Entity(BankAccountEntityKey)(entityContext =>
+      BankAccountActor(entityContext.entityId)))
+
+    // Wait for cluster to form
+    Thread.sleep(1000)
+
+    super.beforeAll()
+  }
+
+  override protected def afterAll(): Unit = {
+    testKit.shutdownTestKit()
+    super.afterAll()
+  }
 
   implicit val timeout: Timeout = 30.seconds
   implicit val routeTestTimeout: RouteTestTimeout = RouteTestTimeout(30.seconds)
-  implicit val ec: ExecutionContext = system.executionContext
+//  implicit val ec: ExecutionContext = testKit.system.executionContext
+  implicit val typedSystem: ActorSystem[_] = testKit.system
 
   "The complete Akka API system" should {
 
     "work end-to-end with real actors" in {
       // Setup cluster
-      val cluster = Cluster(system)
-      cluster.manager ! JoinSeedNodes(List(cluster.selfAddress))
+      val cluster = Cluster(testKit.system)
+      cluster.manager ! JoinSeedNodes(List(cluster.selfMember.address))
 
       // Setup real sharding
-      val sharding = akka.cluster.sharding.typed.ClusterSharding(system)
+      val sharding = ClusterSharding(testKit.system)
       val shardingHelper = ShardingHelper(sharding)
       
       // Setup HTTP routes
@@ -108,7 +135,7 @@ class IntegrationTest extends AnyWordSpec with Matchers with ScalaTestActorTestK
         val response = responseAs[ApiResponse]
         response.status shouldBe "success"
         response.data shouldBe defined
-        val accountData = response.data.get.asJsObject.fields("account").asJsObject
+        val accountData = response.data.get.asJsObject
         accountData.fields("accountId").convertTo[String] shouldBe "integration-test-account"
         accountData.fields("balance").convertTo[Double] shouldBe 1200.0
         accountData.fields("owner").convertTo[String] shouldBe "Integration Test User"
@@ -138,10 +165,10 @@ class IntegrationTest extends AnyWordSpec with Matchers with ScalaTestActorTestK
 
     "handle concurrent operations correctly" in {
       // Setup cluster and sharding
-      val cluster = Cluster(system)
-      cluster.manager ! JoinSeedNodes(List(cluster.selfAddress))
+      val cluster = Cluster(testKit.system)
+      cluster.manager ! JoinSeedNodes(List(cluster.selfMember.address))
       
-      val sharding = akka.cluster.sharding.typed.ClusterSharding(system)
+      val sharding = ClusterSharding(testKit.system)
       val shardingHelper = ShardingHelper(sharding)
       val routes = BankAccountRoutes(shardingHelper).routes
 
@@ -156,7 +183,7 @@ class IntegrationTest extends AnyWordSpec with Matchers with ScalaTestActorTestK
       Thread.sleep(100)
 
       // Perform multiple concurrent deposits
-      val depositFutures = (1 to 5).map { i =>
+      val depositFutures = (1 to 5).map { _ =>
         val depositRequest = DepositRequest(100.0)
         Future {
           Post("/api/accounts/concurrent-test-account/deposit", depositRequest) ~> routes ~> check {
